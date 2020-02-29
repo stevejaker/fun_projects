@@ -100,7 +100,6 @@ class TextMessager():
 		print("Attempting to log into email ...")
 		try:
 			self.server.login(self.user_email, getpass.getpass())
-			# self.server.login(self.user_email, input("password"))
 			print("Logged into email.")
 		except:
 			print("ERROR")

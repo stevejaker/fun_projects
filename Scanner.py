@@ -12,25 +12,31 @@ import json
 import threading
 import traceback
 import queue
-import uuid
-# import math
+# import uuid # To be used eventually
 
 # Slack and Flask Import Libraries
 from slackclient import SlackClient
 from flask import Flask, request, jsonify, make_response, Response
 # from flask import Flask, request, make_response, redirect, url_for
 
-# Personal Import Libraries
-# from mytime import mytime # Maybe not needed
-
 # Start Flask app
 app = Flask(__name__)
 
+class DbManage(threading.Thread):
+    """
+    """
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+    def run(self):
+        pass
+
 class Message:
     """docstring for Message."""
-    def __init__(self, msg, message_type='raid'):
+    def __init__(self, msg, message_type='raid', box=None):
+        idk_url = "https://s3-us-west-2.amazonaws.com/slack-files2/bot_icons/2019-04-07/602962075476_48.png"
         self.emoji_list      = [':crescent_moon:',':question:',":heavy_check_mark:",":sunny:",":cloud:",":rain_cloud:",":snow_cloud:"]
-        self.id              = str(uuid.uuid4())
+        # self.id              = str(uuid.uuid4()) # To be used eventually
         self.ts              = msg['ts']
         self.username        = msg['username']
         self.icon_url        = msg['icons']['image_48']
@@ -42,12 +48,8 @@ class Message:
         # self.title           = msg['attachments'][0]['title']
         
         self.lat, self.lon   = self.getLatLon(self.title_link)
+        self.box = box 
 
-        # Control Info
-        self.max_lat   = None # FIXME: ADD CORRECT LAT
-        self.min_lat   = None # FIXME: ADD CORRECT LAT
-        self.max_lon   = None # FIXME: ADD CORRECT LON
-        self.min_lon   = None # FIXME: ADD CORRECT LON
         self.maps_zoom = 14
         self.maps_size = 200
 
@@ -109,6 +111,12 @@ class Message:
 
     def get_info_str(self):
         return f"{self.username} {self.title_link} {self.icon_url} {self.color} {self.lat} {self.lon}\n"
+    
+    def is_in_box(self, boxes):
+        for box in boxes:
+            if box['min_lat'] <= self.lat <= box['max_lat'] and box['min_lon'] <= self.lon <= box['max_lon']:
+                return True # Indicates that lat/lon is inside of one of the boxes
+        return False # Not in any of the boxes
 
     def is_valid(self):
         """
@@ -117,11 +125,14 @@ class Message:
         """
         
         # Do something here with max/min lat/lon
-        info_str = self.get_info_str()
+        if self.box is None or not self.is_in_box(self.box):
+            return False
+
         if logger_type == 'sql':
             # Do Some sort of sql thingy
             pass
         else:
+            info_str = self.get_info_str()
             with open("logfile.txt", 'r') as f:
                 f = f.readlines()
             if info_str in f:
@@ -140,7 +151,6 @@ icon_url = {self.icon_url}
 attachments =  {self.attachment}
 
 """)
-       
 
     def remove_parentheses(self, my_string):
         return re.sub(r'\([^)]*\)', '', my_string)
@@ -176,11 +186,34 @@ attachments =  {self.attachment}
     #         "chat.postMessage",
     # 		channel="U4JUUTUBT",#CHANNEL_NAME,
     #                 text=message)
-    #     del slack_client
 
 class Scanner(object):
-    """docstring for Scanner."""
-    def __init__(self, queue=None, maps_api_key=None, cookies=None, scanner=None, sc=None, post_token=None):
+    """
+    A class built to scan one Slack team and forward specific messages to another.
+    
+    This was designed specifically for a Pokemon Go Slack team who is wanting publicly
+    accesible data forwarded from another team to their channels.
+    
+    API tokens are required to interact with the python SlackClient framework and this 
+    requires a Slack App. the rtm_connect() method allows for the constant scanning of
+    channels in real time, but we cannot use this because we are not able to generate
+    the appropriate API tokens to utilize this method.
+
+    Since we are not granted API tokens for the other team, I am using the web browser's
+    token and cookies from the team to be scanned and am spamming the "conversations.history" 
+    API method (and get a success response) without generating a valid token. This is 
+    not nearly as effective as the rtm_connect() method, but it has shown less errors
+    and issues with the socket connection failing. Furthermore, due to the Tier 4 rate
+    limiting of the "conversations.history" method, we can run multiple channels using
+    multithreading to scan any channel we desire to. The `Message' class is required
+    for this to work; however, the one presented in this program has been specified
+    to work exactly with the team we are scanning as we are making some serious changes
+    to the messages before posting them to our channel. Modification should be made as
+    needed to accomodate for other messages that are being scanned and reposted.
+
+    According to Slack customer support, this should not be possible ;)
+    """
+    def __init__(self, queue=None, maps_api_key=None, cookies=None, scanner=None, sc=None, post_token=None, DEBUG=False):
         """
         ESSENTIAL SETUP -- If parameters are not provided, the program will exit
         """
@@ -212,21 +245,28 @@ class Scanner(object):
         if sc is not None:
             self.sc = sc
         else:
-            self.KILL("No SlackClient posting object provided. Impossible to send messages withoutthis !!!")
+            self.KILL("No SlackClient posting object provided. Impossible to send messages without this !!!")
 
+        self.DEBUG = DEBUG
         self.buffer = 1 # Buffer for scanning when initializing (in seconds)
         self.delay = .1 # Sleep Timer
         self.scanner_threads = 0
+        self.ignore_batch = True # Sets to throw away the first batch from the scanner
         self.scanner_start = time.ctime()
-        self.status = f"Status: Setting Up\nStarted: {self.scanner_start}\nLast Scan: None"
+        self.status = f"Status: `Setting Up`\nStarted: `{self.scanner_start}`\nLast Scan: `None`"
         self.channel_id_list = []
         self.post_channel_id_list = []
         self.channel_name_list = []
         self.post_channel_name_list = []
         self.scan_type_dict = {}
-        self.update_queue
+        self.scan_box_dict = {}
+        self.data = {}
+        self.update_queue()
 
     def mk(self, msg, markup_type):
+        """
+        Handles Slack markups for some pretty text formatting
+        """
         markup_type = markup_type.lower()
         if markup_type in ['bold', 'b']:
             return f"*{msg}*"
@@ -247,12 +287,31 @@ class Scanner(object):
     def get_queue(self):
         return list(self.queue.queue)
 
-    def add_scan_channel(self, channel, post_channel, scan_type):
+    def add_scan_channel(self, channel, post_channel, scan_type, scan_box):
         """
-        Requires the channel being scanned and the channel being posted to
+        Requires the channel being scanned and the channel you are posting to
+        along with scan_type to identify which api token to use.
         """
+        # if self.data == {}:
+        #     idx = 1
+        # else:
+        #     idx = int(max(self.data)) + 1
+        
         channel_name = self.get_channel_name(channel, token_type='scan')
         post_channel_name = self.get_channel_name(post_channel, token_type='post')
+
+        # if channel in self.data:
+        #     self.data[channel]["post_to_id"].append(post_channel)
+        #     self.data[channel]["post_to_name"].append(post_channel_name)
+        #     self.data[channel]["box"].append(scan_box)
+
+        # else:
+        #     self.data[channel] = {
+        #         "channel_name": channel_name,
+        #         "post_to_id": [post_channel],
+        #         "post_to_name": [post_channel_name],
+        #         "box": [scan_box]
+        #     }
 
         self.channel_id_list.append(channel)
         self.post_channel_id_list.append(post_channel)
@@ -261,15 +320,18 @@ class Scanner(object):
         self.post_channel_name_list.append(post_channel_name)
 
         self.scan_type_dict[channel] = scan_type
+        self.scan_box_dict[channel] = scan_box
 
     def update_status(self, last_scan, status="Running"):
         # Not using `mk' as it would make this look pretty nasty
+        channel_map = self.get_channel_map_str(join_type="\n")
         self.status = f"""
 *Status:* `{status}`
 *Started:* `{self.scanner_start}`
 *Last Scan:* `{last_scan}`
 *Scanning Instances*: `{self.scanner_threads}`
-*Channels Scanned:* {self.get_channel_map_str()}
+*Channels Scanned*
+{channel_map}
         """
 
     def get_channel_name(self, channel, token_type='scan'):
@@ -278,17 +340,22 @@ class Scanner(object):
         name = r['channel']['name']
         return name
 
-    def get_channel_map_str(self):
+    def get_channel_map_str(self, join_type=" "):
         channel_map = self.get_channel_map()
         out = []
         for key, value in channel_map.items():
             out.append(f"{self.mk(key, 'c')}->{self.mk(value, 'c')}")
-        return " ".join(out)
+        return join_type.join(out)
 
     def get_channel_map(self, names=True):
         """
         Returns Dict of {"scan_channel": "post_channel"}
         """
+        # for channel, data in self.data.items():
+        #     channel_name  = data["channel_name"]
+        #     post_to_ids   = " ".join(data["post_to_id"])
+        #     post_to_names = " ".join(data["post_to_name"])
+
         if names:
             return dict(zip(self.channel_name_list, self.post_channel_name_list))
         else:
@@ -300,14 +367,15 @@ class Scanner(object):
         for scan_channel, post_channel in channel_dict.items():
             counter += 1
             scan_type = self.scan_type_dict[scan_channel]
+            scan_box = self.scan_box_dict[scan_channel]
             print(f"Thread {counter}: Starting Scanning {scan_channel}->{post_channel} for `{scan_type}' ...", end=" ")
-            thread = threading.Thread(target=self.main, args=(scan_channel, post_channel, scan_type))
+            thread = threading.Thread(target=self.main, args=(scan_channel, post_channel, scan_type, scan_box))
             thread.start()
             print(f"Thread {counter} Started!")
 
         self.scanner_threads = counter
 
-    def main(self, scan_channel, post_channel, scan_type):
+    def main(self, scan_channel, post_channel, scan_type, scan_box):
         ts = time.time()
         ts_old = ts - self.buffer # Sets buffer when initializing
 
@@ -319,13 +387,17 @@ class Scanner(object):
                 if 'bot_id' and 'subtype' and 'attachments' not in message:
                     continue
                 else:
-                    message = Message(message, message_type=scan_type)
+                    message = Message(message, message_type=scan_type, box=scan_box)
                     if message.is_valid():
-                        if DEBUG:
+                        if self.DEBUG:
                             message.print_to_console()
+                        elif self.ignore_batch:
+                            # print('Ignoring Batch')
+                            pass
                         else:
-                            self.postToSlack(message)#, channel=post_channel)
+                            self.postToSlack(message, channel=post_channel)
             time.sleep(self.delay)
+            self.ignore_batch = False 
 
     def postToSlack(self, message, channel='G6DLY0GDA'):
         r = self.sc.api_call(
@@ -405,11 +477,19 @@ class WebServer(threading.Thread): # THIS CLASS HAS NOT BEEN STARTED
 
         form = request.form.to_dict()
         token, team_id, channel_id, user_id, text, response_url, trigger_id = process_request(form)
-        sc_posting.api_call(
-            "chat.postEphemeral",
+        # print(token, team_id, channel_id, user_id, text, response_url, trigger_id, sep="\n")
+        if 'public' == text.lower():
+            status = f"<@{user_id}> Shared the Scanner Status using `/scanner_status {text}`\n{status}"
+            sc_posting.api_call(
+            "chat.postMessage",
             text=status,
-            channel=channel_id,
-            user=user_id)
+            channel=channel_id)
+        else:
+            sc_posting.api_call(
+                "chat.postEphemeral",
+                text=status,
+                channel=channel_id,
+                user=user_id)
         return make_response("", 200)
 
     @app.route('/button') # Not Started
@@ -508,6 +588,7 @@ class WebServer(threading.Thread): # THIS CLASS HAS NOT BEEN STARTED
 ######################
 
 def get_token(token_file): # DONE
+    token_file = os.path.join(os.path.expanduser("~"), ".scanner", token_file)
     with open(token_file , 'r') as f:
         return(f.readline().replace("\n","").strip())
 
@@ -523,7 +604,7 @@ def process_request(info):
     team_id      = info['team_id']
     channel_id   = info['channel_id']
     user_id      = info['user_id']
-    text         = info['text']
+    text         = info['text'].strip()
     response_url = info['response_url']
     trigger_id   = info['trigger_id']
     return token, team_id, channel_id, user_id, text, response_url, trigger_id
@@ -531,6 +612,10 @@ def process_request(info):
 ######################
 
 global server_port, AUTHED_USER_LIST, maps_api_key, DEBUG, logger_type
+db               = "pogo"
+db_table         = ""
+db_user          = ""
+db_pass          = ""
 scanner_queue    = queue.Queue()
 server_port      = 8080
 AUTHED_USER_LIST = [] # INSERT USERS HERE 
@@ -551,13 +636,60 @@ sc_posting       = SlackClient(post_token)
 #     }
 # }
 scanner_map      = {
-    "C95PNBBQA" : {
-        "post_to": "G6DLY0GDA",
-        "type": "raid"
+    # 1 : { #NORTH-RAIDS
+    #     "scan_channel": "C95PNBBQA",
+    #     "post_to": "CUSDADQCD",
+    #     "type": "raid",
+    #     "box": [{
+    #             "max_lat":  40.4318390,
+    #             "min_lat":  40.3118490,
+    #             "max_lon": -111.643005,
+    #             "min_lon": -111.865929 
+    #             }]
+    # },
+    2 : { #SOUTH-RAIDS
+        "scan_channel": "C95PNBBQA",
+        "post_to": "CUSDBCG1K",
+        "type": "raid",
+        "box": [{
+                "max_lat":  40.3118490,
+                "min_lat":  40.1600000,
+                "max_lon": -111.587037,
+                "min_lon": -111.754051 
+                }]
     },
-    "CBJRLE45U" : {
-        "post_to": "G6DLY0GDA",
-        "type": "mon"
+    # 3 : { #NORTH-MONS
+    #     "scan_channel": "CBJRLE45U",
+    #     "post_to": "CUSDADQCD",
+    #     "type": "mon",
+    #     "box": [{
+    #             "max_lat":  40.4318390,
+    #             "min_lat":  40.3118490,
+    #             "max_lon": -111.643005,
+    #             "min_lon": -111.865929 
+    #             }]
+    # },
+    # 4 : { #SOUTH-MONS
+    #     "scan_channel": "CBJRLE45U",
+    #     "post_to": "CUSDBCG1K",
+    #     "type": "mon",
+    #     "box": [{
+    #             "max_lat":  40.3118490,
+    #             "min_lat":  40.1600000,
+    #             "max_lon": -111.587037,
+    #             "min_lon": -111.754051 
+    #             }]
+    # }
+    4 : { #SOUTH-MONS-INTO-PG
+        "scan_channel": "CBJRLE45U",
+        "post_to": "CUSDBCG1K",
+        "type": "mon",
+        "box": [{
+                "max_lat":  40.3912200,
+                "min_lat":  40.1600000,
+                "max_lon": -111.587037,
+                "min_lon": -111.807367
+                }]
     }
 }
 # TODO! 
@@ -570,7 +702,15 @@ if __name__ == "__main__":
     Webserver = WebServer(queue=scanner_queue, verify_token=verify_token)
     Webserver.setDaemon(True)
     Webserver.start()
+    time.sleep(3) # Allows time for Webserver to start
     print("Webserver Started!\n")
+
+    if logger_type.lower() == 'sql':
+        print("Starting SQL DB Manager ...", end=" ")
+        DB = DbManage() # Add Args
+        DB.setDaemon(True)
+        DB.start()
+        print("SQL DB Manager Started!\n")
 
     print("Setting Up Scanner ...", end=" ")
     Scan = Scanner(
@@ -579,15 +719,18 @@ if __name__ == "__main__":
         cookies=cookies,
         scanner=scanner_token,
         sc=sc_posting,
-        post_token=post_token
+        post_token=post_token,
+        DEBUG=DEBUG
     )
     print("Set Up Complete!\n")
 
-    for scan_channel, info in scanner_map.items():
+    for key, info in scanner_map.items():
+        scan_channel = info['scan_channel']
         post_channel = info['post_to']
-        scan_type = info['type']
+        scan_type    = info['type']
+        scan_box     = info['box']
         print(f"Adding Scan Channel {scan_channel}->{post_channel} with type {scan_type} ...", end=" ")
-        Scan.add_scan_channel(scan_channel, post_channel, scan_type)
+        Scan.add_scan_channel(scan_channel, post_channel, scan_type, scan_box)
         print("Added!")
 
     print("\nStarting Scanner ...")

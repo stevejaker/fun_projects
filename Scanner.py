@@ -399,7 +399,7 @@ class Scanner(object):
             time.sleep(self.delay)
             self.ignore_batch = False 
 
-    def postToSlack(self, message, channel='G6DLY0GDA'):
+    def postToSlack(self, message, channel=''):
         r = self.sc.api_call(
             "chat.postMessage",
             channel     = channel,
@@ -626,19 +626,19 @@ post_token       = get_token(".POST_TOKEN")
 verify_token     = get_token(".VERIFICATION_TOKEN")
 sc_posting       = SlackClient(post_token)
 # scanner_map      = {
-#     "C95PNBBQA" : {
-#         "post_to": "C949PBR46",
+#     "" : {
+#         "post_to": "",
 #         "type": "raid"
 #     },
-#     "CBJRLE45U" : {
-#         "post_to": "G6DLY0GDA",
+#     "" : {
+#         "post_to": "",
 #         "type": "mon"
 #     }
 # }
 scanner_map      = {
     # 1 : { #NORTH-RAIDS
-    #     "scan_channel": "C95PNBBQA",
-    #     "post_to": "CUSDADQCD",
+    #     "scan_channel": "",
+    #     "post_to": "",
     #     "type": "raid",
     #     "box": [{
     #             "max_lat":  40.4318390,
@@ -648,8 +648,8 @@ scanner_map      = {
     #             }]
     # },
     2 : { #SOUTH-RAIDS
-        "scan_channel": "C95PNBBQA",
-        "post_to": "CUSDBCG1K",
+        "scan_channel": "",
+        "post_to": "",
         "type": "raid",
         "box": [{
                 "max_lat":  40.3118490,
@@ -670,8 +670,8 @@ scanner_map      = {
     #             }]
     # },
     # 4 : { #SOUTH-MONS
-    #     "scan_channel": "CBJRLE45U",
-    #     "post_to": "CUSDBCG1K",
+    #     "scan_channel": "",
+    #     "post_to": "",
     #     "type": "mon",
     #     "box": [{
     #             "max_lat":  40.3118490,
@@ -681,8 +681,8 @@ scanner_map      = {
     #             }]
     # }
     4 : { #SOUTH-MONS-INTO-PG
-        "scan_channel": "CBJRLE45U",
-        "post_to": "CUSDBCG1K",
+        "scan_channel": "",
+        "post_to": "",
         "type": "mon",
         "box": [{
                 "max_lat":  40.3912200,
